@@ -1,6 +1,6 @@
 {
   "distancia_inicial": 60,
-  "meta_vitoria": 150,
+  "meta_vitoria": 400,
   "aproximacao_m_por_s": 1,
   "penalidade_erro": 10,
   "sinais_por_nivel": 2,
@@ -10,5 +10,9 @@
     {"ate_segundos": 5, "metros": 30},
     {"ate_segundos": 10, "metros": 15},
     {"ate_segundos": 20, "metros": 5}
-  ]
+  ],
+  "vidas": 3,
+  "distancia_apos_alcance": 35,
+  "velocidade_por_nivel_kmh": [80, 100, 125, 150, 180],
+  "chance_obstaculo_por_nivel": {"3": 0.5, "4": 0.7, "5": 0.9}
 }
