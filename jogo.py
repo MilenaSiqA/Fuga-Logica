@@ -1,4 +1,4 @@
-"""Regras do Fuga Lógica: distância, tempo, níveis, vitória e derrota.
+"""Regras do Fuga Lógica: distância, tempo, níveis, vidas, obstáculos, vitória e derrota.
 
 O tempo é medido aqui, no Python: ele começa quando o sinal é entregue ao
 navegador e termina quando a resposta chega. O navegador apenas mostra o
@@ -59,6 +59,115 @@ def solucoes_satisfazer(sinal):
 
 
 # ---------------------------------------------------------------------------
+# Obstáculos (níveis avançados)
+#
+# Antes de alguns sinais aparece um obstáculo na pista. Ele só sai do caminho
+# depois que o jogador responde uma pergunta rápida. As perguntas são geradas
+# na hora e corrigidas pelo motor lógico, então não há gabarito guardado.
+# ---------------------------------------------------------------------------
+
+OBSTACULO_DO_NIVEL = {3: "cones", 4: "barreira", 5: "pedras"}
+TITULO_OBSTACULO = {
+    "cones": "Cones na pista",
+    "barreira": "Barreira na rodovia",
+    "pedras": "Pedras na estrada",
+}
+
+# Fórmulas das perguntas "qual é o valor?", da mais simples à mais difícil.
+FORMULAS_VALOR = {
+    3: ["P & Q", "P | Q", "~P", "P -> Q", "~P | Q", "~(P & Q)"],
+    4: ["P <-> Q", "~P -> Q", "~(P | Q)", "P & ~Q", "(P -> Q) & P", "~P <-> Q"],
+    5: ["(P & Q) -> R", "P | (Q & R)", "(P -> Q) | R", "~(P & R) <-> Q", "(P | Q) & ~R"],
+}
+
+# Perguntas de negação: proposição base e opções (só uma é a negação dela).
+NEGACOES = [
+    ("P & Q", ["~P | ~Q", "~P & ~Q", "~P & Q"]),
+    ("P | Q", ["~P & ~Q", "~P | ~Q", "P & ~Q"]),
+    ("P -> Q", ["P & ~Q", "~P -> ~Q", "Q -> P"]),
+    ("~P | Q", ["P & ~Q", "P | ~Q", "~P & Q"]),
+]
+
+# Tipos de pergunta liberados em cada nível.
+PERGUNTAS_DO_NIVEL = {
+    3: ["valor"],
+    4: ["valor", "valor", "linhas"],
+    5: ["valor", "negacao", "linhas"],
+}
+
+
+def _nivel_obstaculo(nivel):
+    return max(3, min(5, nivel))
+
+
+def gerar_obstaculo(nivel, sorteio):
+    """Cria um obstáculo com uma pergunta rápida adequada ao nível."""
+    n = _nivel_obstaculo(nivel)
+    tipo = OBSTACULO_DO_NIVEL[n]
+    pergunta = sorteio.choice(PERGUNTAS_DO_NIVEL[n])
+    base = {
+        "id": f"obs-{n}-{pergunta}",
+        "nivel": nivel,
+        "tipo": "obstaculo",
+        "obstaculo": tipo,
+        "titulo": TITULO_OBSTACULO[tipo],
+        "pergunta": pergunta,
+        "embaralhar": True,
+    }
+
+    if pergunta == "valor":
+        formula = sorteio.choice(FORMULAS_VALOR[n])
+        valores = {v: sorteio.choice([True, False]) for v in logica.variaveis(formula)}
+        resultado = logica.avaliar(formula, valores)
+        return {
+            **base,
+            "enunciado": f"Para tirar o obstáculo: com {logica.descrever(valores)}, "
+                         "qual é o valor desta proposição?",
+            "formula": formula,
+            "valores": valores,
+            "opcoes": ["Verdadeira (V)", "Falsa (F)"],
+            "certa": 0 if resultado else 1,
+            "embaralhar": False,
+        }
+
+    if pergunta == "linhas":
+        qtd = sorteio.choice([3, 4, 5])
+        return {
+            **base,
+            "enunciado": f"Para tirar o obstáculo: uma proposição tem {qtd} variáveis. "
+                         "Quantas linhas tem a tabela-verdade dela?",
+            "quantidade": qtd,
+            "opcoes": [str(2 ** qtd), str(2 * qtd), str(2 ** (qtd + 1))],
+            "certa": 0,
+        }
+
+    proposicao, opcoes = sorteio.choice(NEGACOES)
+    negada = f"~({proposicao})"
+    certa = next(i for i, o in enumerate(opcoes) if logica.equivalentes(negada, o))
+    return {
+        **base,
+        "enunciado": "Para tirar o obstáculo: qual opção é a negação desta proposição?",
+        "formula": proposicao,
+        "opcoes": list(opcoes),
+        "certa": certa,
+    }
+
+
+def explicar_obstaculo(s):
+    """Explicação mostrada quando o jogador erra a pergunta do obstáculo."""
+    if s["pergunta"] == "valor":
+        resultado = "verdadeira" if s["certa"] == 0 else "falsa"
+        return (f"Com {logica.descrever(s['valores'])}, "
+                f"{logica.formatar(s['formula'])} é {resultado}.")
+    if s["pergunta"] == "linhas":
+        n = s["quantidade"]
+        return f"São 2^{n} = {2 ** n} linhas: cada variável dobra o número de combinações."
+    certa = logica.formatar(s["opcoes"][s["certa"]])
+    return (f"A negação de {logica.formatar(s['formula'])} é {certa} "
+            "(lembre das leis de De Morgan e de que ¬(P → Q) ≡ P ∧ ¬Q).")
+
+
+# ---------------------------------------------------------------------------
 # Partida
 # ---------------------------------------------------------------------------
 
@@ -74,6 +183,11 @@ class Partida:
         self.resolvidos = 0
         self.erros = 0
         self.situacao = "jogando"  # jogando | vitoria | derrota
+        self.vidas_max = int(config.get("vidas", 3))
+        self.vidas = self.vidas_max
+        self.alcances = 0  # quantas vezes a viatura chegou no carro
+        self.obstaculos_superados = 0
+        self._obstaculo_pendente = False
 
         self.sinal = None
         self.ordem = []  # ordem embaralhada das opções mostradas
@@ -91,8 +205,24 @@ class Partida:
         self.ultimo_desconto = agora
         self.distancia -= decorrido * self.config["aproximacao_m_por_s"]
         if self.distancia <= 0:
+            self._ser_alcancado()
+
+    def _ser_alcancado(self):
+        """A viatura chegou no carro: perde uma vida. Sem vidas, o jogador é pego."""
+        self.alcances += 1
+        self.vidas -= 1
+        if self.vidas <= 0:
+            self.vidas = 0
             self.distancia = 0
             self.situacao = "derrota"
+        else:
+            # O carro escapa por pouco e volta a fugir com uma pequena vantagem.
+            self.distancia = float(self.config.get("distancia_apos_alcance", 35))
+
+    def velocidade(self):
+        """Velocidade do carro do jogador (km/h): cresce a cada nível."""
+        tabela = self.config.get("velocidade_por_nivel_kmh") or [80]
+        return tabela[min(self.nivel, len(tabela)) - 1]
 
     def _bonus(self, segundos, nivel):
         extra = self.config["acrescimo_tempo_por_nivel"] * (nivel - 1)
@@ -118,9 +248,14 @@ class Partida:
         if self.situacao != "jogando":
             return None
         if self.sinal is None:
-            self.sinal = self._sortear_sinal()
+            if self._obstaculo_pendente:
+                self._obstaculo_pendente = False
+                self.sinal = gerar_obstaculo(self.nivel, self.sorteio)
+            else:
+                self.sinal = self._sortear_sinal()
             self.ordem = list(range(len(self.sinal.get("opcoes", []))))
-            self.sorteio.shuffle(self.ordem)
+            if self.sinal.get("embaralhar", True):
+                self.sorteio.shuffle(self.ordem)
             self.inicio_sinal = self.ultimo_desconto = self.relogio()
         return self._publico()
 
@@ -133,7 +268,13 @@ class Partida:
             "tipo": s["tipo"],
             "enunciado": s["enunciado"],
         }
-        if s["tipo"] == "satisfazer":
+        if s["tipo"] == "obstaculo":
+            dados["obstaculo"] = s["obstaculo"]
+            dados["titulo"] = s["titulo"]
+            if "formula" in s:
+                dados["formula"] = logica.formatar(s["formula"])
+            dados["opcoes"] = [logica.formatar(s["opcoes"][i]) for i in self.ordem]
+        elif s["tipo"] == "satisfazer":
             dados["formula"] = logica.formatar(s["formula"])
             dados["variaveis"] = [
                 {"nome": nome, "valor": valor, "livre": valor is None}
@@ -159,7 +300,8 @@ class Partida:
         bonus = 0
         if self.sinal is not None and self.situacao == "jogando":
             segundos = self.relogio() - self.inicio_sinal
-            bonus = self._bonus(segundos, self.sinal["nivel"])
+            if self.sinal["tipo"] != "obstaculo":
+                bonus = self._bonus(segundos, self.sinal["nivel"])
         return {
             "situacao": self.situacao,
             "distancia": round(self.distancia, 1),
@@ -167,6 +309,11 @@ class Partida:
             "nivel": self.nivel,
             "resolvidos": self.resolvidos,
             "erros": self.erros,
+            "vidas": self.vidas,
+            "vidas_max": self.vidas_max,
+            "alcances": self.alcances,
+            "velocidade": self.velocidade(),
+            "obstaculos_superados": self.obstaculos_superados,
             "segundos_no_sinal": round(segundos, 1),
             "bonus_atual": bonus,
         }
@@ -180,7 +327,7 @@ class Partida:
         agora = self.relogio()
         self._descontar_tempo(agora)
         if self.situacao == "derrota":
-            return self._resultado(False, "A viatura te alcançou enquanto você pensava.")
+            return self._resultado(False, "A viatura te pegou enquanto você pensava.")
 
         correto, explicacao = self._corrigir(valores, escolha)
 
@@ -188,9 +335,13 @@ class Partida:
             self.erros += 1
             self.distancia -= self.config["penalidade_erro"]
             if self.distancia <= 0:
-                self.distancia = 0
-                self.situacao = "derrota"
+                self._ser_alcancado()
             return self._resultado(False, explicacao)
+
+        if self.sinal["tipo"] == "obstaculo":
+            self.obstaculos_superados += 1
+            self.sinal = None
+            return self._resultado(True, "Obstáculo superado! Pista livre.")
 
         bonus = self._bonus(agora - self.inicio_sinal, self.sinal["nivel"])
         self.distancia += bonus
@@ -202,6 +353,11 @@ class Partida:
         self.sinal = None
         if self.distancia >= self.config["meta_vitoria"]:
             self.situacao = "vitoria"
+        else:
+            # Nos níveis avançados, pode surgir um obstáculo antes do próximo sinal.
+            chances = self.config.get("chance_obstaculo_por_nivel", {})
+            chance = chances.get(str(self.nivel), 0)
+            self._obstaculo_pendente = self.sorteio.random() < chance
         texto = f"Sinal aberto! +{bonus} m" if bonus else "Sinal aberto, mas sem bônus de tempo."
         return self._resultado(True, texto, bonus)
 
@@ -241,6 +397,10 @@ class Partida:
         s = self.sinal
         if not isinstance(escolha, int) or not 0 <= escolha < len(self.ordem):
             raise ValueError("Escolha uma das opções.")
+        if s["tipo"] == "obstaculo":
+            if self.ordem[escolha] == s["certa"]:
+                return True, ""
+            return False, explicar_obstaculo(s)
         texto = s["opcoes"][self.ordem[escolha]]
         if _opcao_correta(s, texto):
             return True, ""
