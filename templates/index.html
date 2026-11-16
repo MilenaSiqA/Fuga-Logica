@@ -23,16 +23,29 @@
           <span class="meta">(meta: {{ cfg.meta_vitoria }} m)</span>
         </p>
       </div>
-      <p class="nivel">Nível <strong id="nivel-num">1</strong></p>
+      <div class="status">
+        <p class="nivel">Nível <strong id="nivel-num">1</strong></p>
+        <div class="velocimetro" aria-label="Velocidade do carro">
+          <svg viewBox="0 0 60 34" aria-hidden="true">
+            <path class="arco" d="M6 30 A24 24 0 0 1 54 30"/>
+            <line class="ponteiro" id="ponteiro" x1="30" y1="30" x2="30" y2="10"/>
+            <circle class="eixo" cx="30" cy="30" r="3"/>
+          </svg>
+          <span><strong id="vel-num">{{ cfg.velocidade_por_nivel_kmh[0] }}</strong> km/h</span>
+        </div>
+        <p class="vidas" id="vidas" aria-label="Vidas restantes: {{ cfg.vidas }}"></p>
+      </div>
     </header>
 
     <div class="palco">
-    <section class="cena" id="cena" aria-label="Rodovia">
-      <div class="sol"></div>
-      <svg class="colinas" viewBox="0 0 900 90" preserveAspectRatio="none" aria-hidden="true">
-        <polygon points="0,90 0,50 90,28 190,52 300,20 420,56 540,26 660,58 780,30 900,48 900,90"/>
-      </svg>
+    <section class="cena" id="cena" data-cenario="1" aria-label="Rodovia">
+      <div class="estrelas" aria-hidden="true"></div>
+      <div class="sol" aria-hidden="true"></div>
+      <div class="fundo-longe" aria-hidden="true"></div>
+      <div class="fundo-perto" aria-hidden="true"></div>
       <div class="estrada"><div class="faixas"></div></div>
+      <div class="chuva" aria-hidden="true"></div>
+      <div class="relampago" aria-hidden="true"></div>
 
       <!-- Sinal de trânsito -->
       <div class="semaforo" id="semaforo" data-fase="parado" data-luz="vermelha" aria-hidden="true">
@@ -42,6 +55,26 @@
           <circle class="lampada l-vermelha" cx="30" cy="22" r="11"/>
           <circle class="lampada l-amarela" cx="30" cy="48" r="11"/>
           <circle class="lampada l-verde" cx="30" cy="74" r="11"/>
+        </svg>
+      </div>
+
+      <!-- Obstáculo (níveis avançados): o desenho muda conforme data-tipo -->
+      <div class="obstaculo" id="obstaculo" data-fase="fora" data-tipo="cones" aria-hidden="true">
+        <svg class="obs-cones" viewBox="0 0 120 60">
+          <g class="cone"><polygon points="8,56 20,8 32,56"/><rect class="faixa-branca" x="14" y="26" width="12" height="6"/><rect class="base" x="2" y="54" width="36" height="5" rx="2"/></g>
+          <g class="cone"><polygon points="48,56 60,8 72,56"/><rect class="faixa-branca" x="54" y="26" width="12" height="6"/><rect class="base" x="42" y="54" width="36" height="5" rx="2"/></g>
+          <g class="cone"><polygon points="88,56 100,8 112,56"/><rect class="faixa-branca" x="94" y="26" width="12" height="6"/><rect class="base" x="82" y="54" width="36" height="5" rx="2"/></g>
+        </svg>
+        <svg class="obs-barreira" viewBox="0 0 120 60">
+          <rect class="perna" x="12" y="26" width="6" height="34"/><rect class="perna" x="102" y="26" width="6" height="34"/>
+          <g class="tabua"><rect x="2" y="12" width="116" height="16" rx="3" fill="#f7f6ef"/>
+            <path d="M10 12 h12 l-12 16 h-8 z M34 12 h12 l-12 16 h-12 z M58 12 h12 l-12 16 h-12 z M82 12 h12 l-12 16 h-12 z M106 12 h12 l-12 16 h-12 z" fill="#e0463d"/></g>
+          <circle class="pisca" cx="10" cy="7" r="5"/><circle class="pisca" cx="110" cy="7" r="5"/>
+        </svg>
+        <svg class="obs-pedras" viewBox="0 0 120 60">
+          <path class="pedra" d="M4 58 L10 34 L28 22 L46 30 L52 58 Z"/>
+          <path class="pedra escura" d="M40 58 L48 26 L70 14 L92 24 L98 58 Z"/>
+          <path class="pedra" d="M84 58 L90 40 L104 34 L116 44 L118 58 Z"/>
         </svg>
       </div>
 
@@ -68,6 +101,19 @@
           <circle class="roda" cx="122" cy="54" r="12"/><circle class="miolo" cx="122" cy="54" r="5"/>
         </svg>
       </div>
+
+      <!-- Troca de cenário ao subir de nível -->
+      <div class="transicao" id="transicao" aria-hidden="true"></div>
+      <div class="faixa-nivel" id="faixa-nivel" role="status" hidden>
+        <strong id="faixa-nivel-titulo"></strong>
+        <span id="faixa-nivel-texto"></span>
+      </div>
+
+      <!-- Aviso quando a viatura chega no carro -->
+      <div class="aviso-alcance" id="aviso-alcance" role="alert" hidden>
+        <strong>A viatura te alcançou!</strong>
+        <span id="aviso-alcance-texto"></span>
+      </div>
     </section>
 
     <section class="painel" id="painel" aria-live="polite">
@@ -86,7 +132,9 @@
         <li>Enquanto o carro está parado, a viatura se aproxima {{ cfg.aproximacao_m_por_s }} m a cada segundo.</li>
         <li>Quanto mais rápido você acerta, mais distância você abre.</li>
         <li>Cada erro custa {{ cfg.penalidade_erro }} m.</li>
-        <li>Chegue a {{ cfg.meta_vitoria }} m de vantagem para escapar. Se a vantagem chegar a 0 m, você é alcançado.</li>
+        <li>Chegue a {{ cfg.meta_vitoria }} m de vantagem para escapar.</li>
+        <li>Você tem {{ cfg.vidas }} vidas: a viatura pode chegar no seu carro {{ cfg.vidas - 1 }} vezes. Na {{ cfg.vidas }}ª, você é pego.</li>
+        <li>A cada nível o carro acelera e o cenário muda. Nos níveis mais avançados surgem obstáculos na pista, que só saem do caminho com uma resposta rápida.</li>
       </ul>
       <button type="button" class="botao" id="btn-comecar">Começar a fuga</button>
     </div>
