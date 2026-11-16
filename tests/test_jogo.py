@@ -11,6 +11,8 @@ import logica
 
 CONFIG = jogo.carregar_config()
 VEL = CONFIG["aproximacao_m_por_s"]
+META = CONFIG["meta_vitoria"]
+VOLTA = CONFIG["distancia_apos_alcance"]
 BANCO = jogo.carregar_banco()
 
 
@@ -52,15 +54,21 @@ class TestBancoDeProposicoes(unittest.TestCase):
                     self.assertLess(len(certas), len(s["opcoes"]), "todas as opções corretas")
 
 
-def nova_partida(**mudancas):
+def nova_partida(sem_obstaculos=True, semente=None, **mudancas):
     config = {**CONFIG, **mudancas}
+    if sem_obstaculos and "chance_obstaculo_por_nivel" not in mudancas:
+        config["chance_obstaculo_por_nivel"] = {}
     relogio = Relogio()
-    return jogo.Partida(config, BANCO, relogio=relogio), relogio
+    import random
+    sorteio = random.Random(semente) if semente is not None else None
+    return jogo.Partida(config, BANCO, relogio=relogio, sorteio=sorteio), relogio
 
 
 def resposta_certa(partida):
     """Descobre a resposta correta do sinal atual (só para testes)."""
     s = partida.sinal
+    if s["tipo"] == "obstaculo":
+        return {"escolha": partida.ordem.index(s["certa"])}
     if s["tipo"] == "satisfazer":
         return {"valores": jogo.solucoes_satisfazer(s)[0]}
     certas = jogo.opcoes_corretas(s)
@@ -70,6 +78,8 @@ def resposta_certa(partida):
 
 def resposta_errada(partida):
     s = partida.sinal
+    if s["tipo"] == "obstaculo":
+        return {"escolha": next(i for i, o in enumerate(partida.ordem) if o != s["certa"])}
     if s["tipo"] == "satisfazer":
         livres = [v for v, val in s["variaveis"].items() if val is None]
         solucoes = jogo.solucoes_satisfazer(s)
@@ -109,28 +119,107 @@ class TestRegras(unittest.TestCase):
         self.assertIsNotNone(p.sinal)
         self.assertEqual(p.erros, 1)
 
-    def test_derrota_quando_a_viatura_alcanca(self):
+    def test_alcance_tira_uma_vida_e_o_carro_escapa(self):
         p, relogio = nova_partida()
         p.proximo_sinal()
         relogio.passar(60 / VEL + 1)  # a viatura percorre mais de 60 m
         estado = p.atualizar()
+        self.assertEqual(estado["situacao"], "jogando")
+        self.assertEqual(estado["vidas"], 2)
+        self.assertEqual(estado["alcances"], 1)
+        self.assertEqual(estado["distancia"], VOLTA)
+
+    def test_terceiro_alcance_e_derrota(self):
+        p, relogio = nova_partida()
+        p.proximo_sinal()
+        relogio.passar(60 / VEL + 1)
+        p.atualizar()                     # 1º alcance: 2 vidas
+        relogio.passar(VOLTA / VEL + 1)
+        p.atualizar()                     # 2º alcance: 1 vida
+        self.assertEqual(p.situacao, "jogando")
+        self.assertEqual(p.vidas, 1)
+        relogio.passar(VOLTA / VEL + 1)
+        estado = p.atualizar()            # 3º alcance: pego
         self.assertEqual(estado["situacao"], "derrota")
+        self.assertEqual(estado["vidas"], 0)
+        self.assertEqual(estado["alcances"], 3)
         self.assertEqual(estado["distancia"], 0)
 
-    def test_derrota_por_erros_seguidos(self):
-        p, _ = nova_partida(distancia_inicial=15)
+    def test_erros_seguidos_gastam_vidas(self):
+        p, _ = nova_partida(distancia_inicial=15, distancia_apos_alcance=5)
         p.proximo_sinal()
-        p.responder(**resposta_errada(p))
+        p.responder(**resposta_errada(p))   # 5 m
+        self.assertEqual(p.vidas, 3)
+        p.responder(**resposta_errada(p))   # alcançado: 2 vidas
+        self.assertEqual(p.vidas, 2)
+        p.responder(**resposta_errada(p))   # alcançado: 1 vida
         self.assertEqual(p.situacao, "jogando")
-        p.responder(**resposta_errada(p))
+        p.responder(**resposta_errada(p))   # pego
         self.assertEqual(p.situacao, "derrota")
 
     def test_vitoria_ao_atingir_a_meta(self):
-        p, _ = nova_partida(distancia_inicial=140)
+        p, _ = nova_partida(distancia_inicial=META - 10)
         p.proximo_sinal()
         r = p.responder(**resposta_certa(p))
         self.assertEqual(r["estado"]["situacao"], "vitoria")
-        self.assertGreaterEqual(p.distancia, 150)
+        self.assertGreaterEqual(p.distancia, META)
+
+    def test_velocidade_aumenta_a_cada_nivel(self):
+        p, _ = nova_partida(distancia_inicial=10_000, meta_vitoria=10**9)
+        velocidades = []
+        for _ in range(10):
+            p.proximo_sinal()
+            velocidades.append(p.estado()["velocidade"])
+            p.responder(**resposta_certa(p))
+        distintas = sorted(set(velocidades))
+        self.assertEqual(len(distintas), CONFIG["nivel_maximo"])
+        self.assertEqual(velocidades, sorted(velocidades))
+
+    def test_obstaculos_so_nos_niveis_avancados(self):
+        p, _ = nova_partida(sem_obstaculos=False, semente=7,
+                            distancia_inicial=10_000, meta_vitoria=10**9)
+        vistos = []
+        for _ in range(40):
+            p.proximo_sinal()
+            if p.sinal["tipo"] == "obstaculo":
+                vistos.append(p.nivel)
+                antes = p.resolvidos
+                r = p.responder(**resposta_certa(p))
+                self.assertTrue(r["correto"])
+                self.assertEqual(p.resolvidos, antes)  # obstáculo não conta como sinal
+            else:
+                p.responder(**resposta_certa(p))
+        self.assertTrue(vistos, "nenhum obstáculo apareceu")
+        self.assertGreaterEqual(min(vistos), 3)
+        self.assertEqual(p.obstaculos_superados, len(vistos))
+
+    def test_erro_no_obstaculo_mantem_o_obstaculo(self):
+        p, _ = nova_partida(sem_obstaculos=False, semente=3,
+                            chance_obstaculo_por_nivel={"1": 1.0})
+        p.proximo_sinal()
+        p.responder(**resposta_certa(p))
+        p.proximo_sinal()
+        self.assertEqual(p.sinal["tipo"], "obstaculo")
+        r = p.responder(**resposta_errada(p))
+        self.assertFalse(r["correto"])
+        self.assertTrue(r["mensagem"])
+        self.assertEqual(p.sinal["tipo"], "obstaculo")
+
+    def test_perguntas_dos_obstaculos_tem_uma_unica_resposta(self):
+        import random
+        sorteio = random.Random(1)
+        for nivel in (3, 4, 5):
+            for _ in range(60):
+                s = jogo.gerar_obstaculo(nivel, sorteio)
+                self.assertEqual(len(set(s["opcoes"])), len(s["opcoes"]))
+                if s["pergunta"] == "valor":
+                    certo = logica.avaliar(s["formula"], s["valores"])
+                    self.assertEqual(s["certa"], 0 if certo else 1)
+                elif s["pergunta"] == "negacao":
+                    negada = f"~({s['formula']})"
+                    certas = [i for i, o in enumerate(s["opcoes"]) if logica.equivalentes(negada, o)]
+                    self.assertEqual(certas, [s["certa"]])
+                self.assertTrue(jogo.explicar_obstaculo(s))
 
     def test_nivel_sobe_a_cada_grupo_de_sinais(self):
         p, _ = nova_partida(distancia_inicial=10_000, meta_vitoria=10**9)
@@ -162,11 +251,12 @@ class TestRegras(unittest.TestCase):
             p.responder(escolha=99) if p.sinal["tipo"] != "satisfazer" else p.responder(valores={})
 
     def test_sinal_publico_nao_revela_a_resposta(self):
-        p, _ = nova_partida(distancia_inicial=10_000, meta_vitoria=10**9)
-        for _ in range(10):
+        p, _ = nova_partida(sem_obstaculos=False, semente=5,
+                            distancia_inicial=10_000, meta_vitoria=10**9)
+        for _ in range(30):
             dados = p.proximo_sinal()
             texto = str(dados)
-            for chave in ("criterio", "correta", "solucao", "gabarito"):
+            for chave in ("criterio", "correta", "solucao", "gabarito", "certa", "valores"):
                 self.assertNotIn(chave, texto)
             p.responder(**resposta_certa(p))
 
