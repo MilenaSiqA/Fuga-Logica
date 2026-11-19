@@ -314,3 +314,121 @@
     retorno.className = 'retorno ' + (ok ? 'ok' : 'erro');
   }
 
+  /* ---------- Fluxo do jogo ---------- */
+
+  async function carregarDesafio() {
+    const dados = await api('/api/sinal');
+    atualizarHud(dados.estado);
+    if (dados.estado.situacao !== 'jogando') return fim(dados.estado);
+    mostrarDesafio(dados.sinal);
+    atualizarHud(dados.estado);
+    iniciarSondagem();
+  }
+
+  function iniciarSondagem() {
+    pararSondagem();
+    sondagem = setInterval(async () => {
+      if (enviando || !sinal) return;
+      try {
+        const estado = await api('/api/estado');
+        if (enviando || !sinal) return;
+        atualizarHud(estado);
+        if (estado.situacao !== 'jogando') fim(estado);
+      } catch (erro) { /* tenta de novo no próximo ciclo */ }
+    }, 250);
+  }
+
+  function pararSondagem() {
+    if (sondagem) clearInterval(sondagem);
+    sondagem = null;
+  }
+
+  async function enviar() {
+    if (enviando || !sinal) return;
+    enviando = true;
+    const botao = $('#btn-confirmar');
+    botao.disabled = true;
+    try {
+      const corpo = sinal.tipo === 'satisfazer' ? { valores } : { escolha };
+      const resp = await api('/api/responder', corpo);
+      atualizarHud(resp.estado);
+
+      if (resp.correto) {
+        pararSondagem();
+        mostrarRetorno(resp.mensagem, true);
+        if (sinal.tipo === 'obstaculo') obstaculo.dataset.fase = 'liberado';
+        else semaforo.dataset.luz = 'verde';
+        sinal = null;
+        if (resp.estado.situacao === 'vitoria') {
+          await pausa(900);
+          return fim(resp.estado);
+        }
+        await pausa(900);
+        placa.hidden = true;
+        await dirigir(resp.estado);
+        await carregarDesafio();
+        enviando = false;
+        parar();
+      } else {
+        mostrarRetorno(resp.mensagem, false);
+        placa.classList.remove('tremer');
+        void placa.offsetWidth;
+        placa.classList.add('tremer');
+        if (resp.estado.situacao === 'derrota') return fim(resp.estado);
+        botao.disabled = sinal.tipo !== 'satisfazer' && escolha === null;
+      }
+    } catch (erro) {
+      mostrarRetorno(erro.message, false);
+      botao.disabled = false;
+    } finally {
+      enviando = false;
+    }
+  }
+
+  async function fim(estado) {
+    pararSondagem();
+    sinal = null;
+    cena.classList.remove('andando');
+    const venceu = estado.situacao === 'vitoria';
+    if (!venceu) {
+      posicionar(0);
+      await pausa(1000);
+    }
+    $('#fim-titulo').textContent = venceu ? 'Você escapou!' : 'Você foi pego!';
+    const resumo = `Você abriu ${estado.resolvidos} sinais e superou ${estado.obstaculos_superados} obstáculo(s), ` +
+      `com ${estado.erros} erro(s), e chegou ao nível ${estado.nivel} a ${estado.velocidade} km/h.`;
+    $('#fim-texto').textContent = venceu
+      ? `Vantagem final de ${Math.round(estado.distancia)} m. ${resumo}`
+      : `A viatura chegou no seu carro ${estado.alcances} vezes. ${resumo} Tente de novo: o raciocínio rápido abre mais distância.`;
+    $('#tela-fim').hidden = false;
+    $('#btn-reiniciar').focus();
+  }
+
+  async function iniciar() {
+    $('#tela-inicio').hidden = true;
+    $('#tela-fim').hidden = true;
+    $('#aviso-alcance').hidden = true;
+    $('#faixa-nivel').hidden = true;
+    placa.hidden = true;
+    cena.classList.remove('alcance');
+    animandoAlcance = false;
+    alcancesVistos = 0;
+
+    const estado = await api('/api/novo-jogo', {});
+    aplicarCenario(estado.nivel, estado.velocidade);
+    atualizarHud(estado);
+    obstaculo.dataset.fase = 'fora';
+    semaforo.dataset.fase = 'fora';
+    cena.classList.add('andando');
+    await carregarDesafio();
+    await parar();
+  }
+
+  $('#btn-comecar').addEventListener('click', iniciar);
+  $('#btn-reiniciar').addEventListener('click', iniciar);
+  window.addEventListener('resize', () => ultimoEstado && !animandoAlcance &&
+    posicionar(Math.max(0, ultimoEstado.distancia)));
+  desenharVidas({ vidas: 3, vidas_max: 3 }, false);
+  mostrarVelocidade(VELOCIDADE_BASE);
+  posicionar(60);
+})();
