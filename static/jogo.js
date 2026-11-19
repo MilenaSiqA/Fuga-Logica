@@ -195,3 +195,122 @@
     cena.classList.remove('andando');
   }
 
+  /* ---------- Montagem do desafio ---------- */
+
+  function criar(tag, classe, texto) {
+    const no = document.createElement(tag);
+    if (classe) no.className = classe;
+    if (texto !== undefined) no.textContent = texto;
+    return no;
+  }
+
+  function alternarChave(botao, nome) {
+    valores[nome] = !valores[nome];
+    botao.setAttribute('aria-pressed', String(valores[nome]));
+    botao.textContent = valores[nome] ? 'V' : 'F';
+  }
+
+  function montarInterruptores(lista) {
+    const caixa = criar('div', 'interruptores');
+    lista.forEach((v) => {
+      const item = criar('div', 'variavel' + (v.livre ? '' : ' fixa'));
+      item.appendChild(criar('span', 'nome', v.nome));
+      if (v.livre) {
+        valores[v.nome] = false;
+        const botao = criar('button', 'chave', 'F');
+        botao.type = 'button';
+        botao.setAttribute('aria-pressed', 'false');
+        botao.setAttribute('aria-label', `Interruptor ${v.nome}`);
+        botao.addEventListener('click', () => alternarChave(botao, v.nome));
+        item.appendChild(botao);
+      } else {
+        item.appendChild(criar('span', 'valor-fixo', v.valor ? 'V' : 'F'));
+        item.appendChild(criar('span', 'dica', 'fixa'));
+      }
+      caixa.appendChild(item);
+    });
+    return caixa;
+  }
+
+  function montarOpcoes(opcoes, botaoConfirmar) {
+    const caixa = criar('div', 'opcoes');
+    opcoes.forEach((texto, indice) => {
+      const botao = criar('button', 'opcao', texto);
+      botao.type = 'button';
+      botao.setAttribute('aria-pressed', 'false');
+      botao.addEventListener('click', () => {
+        escolha = indice;
+        caixa.querySelectorAll('.opcao').forEach((b, i) =>
+          b.setAttribute('aria-pressed', String(i === indice)));
+        botaoConfirmar.disabled = false;
+      });
+      caixa.appendChild(botao);
+    });
+    return caixa;
+  }
+
+  function mostrarDesafio(dados) {
+    sinal = dados;
+    valores = {};
+    escolha = null;
+    placa.replaceChildren();
+    const ehObstaculo = dados.tipo === 'obstaculo';
+    placa.classList.toggle('alerta', ehObstaculo);
+
+    const topo = criar('div', 'placa-topo');
+    topo.appendChild(criar('h2', null, ehObstaculo
+      ? `Obstáculo · ${dados.titulo}`
+      : `Sinal fechado · nível ${dados.nivel}`));
+    const cronometro = criar('p', 'cronometro');
+    cronometro.id = 'cronometro';
+    cronometro.innerHTML = ehObstaculo
+      ? 'Tempo <strong class="segundos">0,0</strong> s · a viatura se aproxima!'
+      : 'Tempo <strong class="segundos">0,0</strong> s · bônus agora <strong class="bonus"></strong>';
+    topo.appendChild(cronometro);
+    placa.appendChild(topo);
+    placa.appendChild(criar('p', 'enunciado', dados.enunciado));
+
+    const botao = criar('button', 'botao', ehObstaculo ? 'Tirar da pista' : 'Confirmar');
+    botao.type = 'button';
+    botao.id = 'btn-confirmar';
+
+    if (dados.tipo === 'satisfazer') {
+      placa.appendChild(criar('div', 'formula', dados.formula));
+      placa.appendChild(montarInterruptores(dados.variaveis));
+    } else {
+      if (ehObstaculo && dados.formula) {
+        placa.appendChild(criar('div', 'formula pequena', dados.formula));
+      }
+      if (dados.referencia) {
+        placa.appendChild(criar('p', 'rotulo', 'Proposição de referência'));
+        placa.appendChild(criar('div', 'formula pequena', dados.referencia));
+      }
+      if (dados.premissas) {
+        placa.appendChild(criar('p', 'rotulo', 'Premissas'));
+        const lista = criar('ol', 'premissas');
+        dados.premissas.forEach((p) => lista.appendChild(criar('li', null, p)));
+        placa.appendChild(lista);
+        placa.appendChild(criar('p', 'rotulo', 'Conclusão'));
+      }
+      botao.disabled = true;
+      placa.appendChild(montarOpcoes(dados.opcoes, botao));
+    }
+
+    const acoes = criar('div', 'acoes');
+    const retorno = criar('p', 'retorno');
+    retorno.id = 'retorno';
+    acoes.append(botao, retorno);
+    placa.appendChild(acoes);
+    botao.addEventListener('click', enviar);
+
+    placa.hidden = false;
+    trazerParaPista(dados);
+  }
+
+  function mostrarRetorno(texto, ok) {
+    const retorno = $('#retorno');
+    if (!retorno) return;
+    retorno.textContent = texto;
+    retorno.className = 'retorno ' + (ok ? 'ok' : 'erro');
+  }
+
